@@ -43,10 +43,23 @@ static struct k_sack* k_sack_copy(struct k_sack* sack);
 static void k_sack_free(struct k_sack* sack);
 static void k_sack_add_item(struct k_sack* sack,struct k_item* item);
 
+struct k_partial_sack
+{
+    int cost;
+    double value; /* needs fractional component */
+    /* items[0] are complete items; items[1] are partial */
+    size_t itemCap[2], itemSz[2];
+    struct k_item** items[2];
+};
+static struct k_partial_sack* k_partial_sack_new();
+static void k_partial_sack_free(struct k_partial_sack* psack);
+static void k_partial_sack_add_item(struct k_partial_sack* psack,struct k_item* item,int cost);
+static void k_partial_sack_print(struct k_partial_sack* psack,const char* title);
+
 struct k_solution
 {
-    size_t sackCounter;
-    struct k_sack* sack;
+    size_t sackCounter; /* number of sacks considered before solution */
+    struct k_sack* sack; /* solution knapsack */
 };
 static struct k_solution* globlSolution;
 static struct k_solution* k_solution_new();
@@ -72,10 +85,12 @@ static int knapsack_optimized2_recursive(struct k_item** item,struct k_sack* sac
 static struct k_solution* greedy_highest_value(struct k_item** items,size_t cnt);
 static struct k_solution* greedy_lowest_cost(struct k_item** items,size_t cnt);
 static struct k_solution* greedy_highest_ratio(struct k_item** items,size_t cnt);
-static struct k_solution* partial_knapsack(struct k_item** items,size_t cnt);
+static struct k_partial_sack* partial_knapsack(struct k_item** items,size_t cnt);
 
+static const char* programName;
 int main(int argc,const char* argv[])
 {
+    programName = argv[0];
     /* setup terminal information if stdout is a terminal */
     if (isatty(STDOUT_FILENO)) {
         const char* term = getenv("TERM");
@@ -93,7 +108,7 @@ int main(int argc,const char* argv[])
         for (i = 1;i < argc;++i) {
             FILE* fin = fopen(argv[i],"r");
             if (fin == NULL)
-                fprintf(stderr,"Cannot open '%s': %s\n",argv[i],strerror(errno));
+                fprintf(stderr,"%s: cannot open '%s': %s\n",argv[0],argv[i],strerror(errno));
             else {
                 knapsack(fin,argv[i]);
                 fclose(fin);
@@ -111,10 +126,18 @@ struct k_item* k_item_new(int cost,int value,const char* name)
     size_t len;
     struct k_item* item;
     item = malloc(sizeof(struct k_item));
+    if (item == NULL) {
+        fprintf(stderr,"%s: memory exception: fail malloc()\n",programName);
+        exit(EXIT_FAILURE);
+    }
     item->cost = cost;
     item->value = value;
     len = strlen(name);
     item->name = malloc(len+1);
+    if (item->name == NULL) {
+        fprintf(stderr,"%s: memory exception: fail malloc()\n",programName);
+        exit(EXIT_FAILURE);
+    }
     strcpy(item->name,name);
     return item;
 }
@@ -153,10 +176,18 @@ struct k_sack* k_sack_new()
 {
     struct k_sack* sack;
     sack = malloc(sizeof(struct k_sack));
+    if (sack == NULL) {
+        fprintf(stderr,"%s: memory exception: fail malloc()\n",programName);
+        exit(EXIT_FAILURE);
+    }
     sack->cost = sack->value = 0;
     sack->itemCap = 4;
     sack->itemSz = 0;
     sack->items = malloc(sizeof(struct k_item*) * sack->itemCap);
+    if (sack->items == NULL) {
+        fprintf(stderr,"%s: memory exception: fail malloc()\n",programName);
+        exit(EXIT_FAILURE);
+    }
     return sack;
 }
 struct k_sack* k_sack_copy(struct k_sack* sack)
@@ -164,11 +195,19 @@ struct k_sack* k_sack_copy(struct k_sack* sack)
     size_t i;
     struct k_sack* copy;
     copy = malloc(sizeof(struct k_sack));
+    if (copy == NULL) {
+        fprintf(stderr,"%s: memory exception: fail malloc()\n",programName);
+        exit(EXIT_FAILURE);
+    }
     copy->cost = sack->cost;
     copy->value = sack->value;
     copy->itemCap = sack->itemCap;
     copy->itemSz = sack->itemSz;
     copy->items = malloc(sizeof(struct k_item*) * copy->itemCap);
+    if (copy->items == NULL) {
+        fprintf(stderr,"%s: memory exception: fail malloc()\n",programName);
+        exit(EXIT_FAILURE);
+    }
     for (i = 0;i < copy->itemSz;++i)
         copy->items[i] = sack->items[i];
     return copy;
@@ -185,7 +224,7 @@ void k_sack_add_item(struct k_sack* sack,struct k_item* item)
         sack->itemCap <<= 2;
         newblock = realloc(sack->items,sizeof(struct k_item*)*sack->itemCap);
         if (newblock == NULL) {
-            fprintf(stderr,"memory exception: fail realloc()\n");
+            fprintf(stderr,"%s: memory exception: fail realloc()\n",programName);
             exit(EXIT_FAILURE);
         }
         sack->items = newblock;
@@ -195,11 +234,90 @@ void k_sack_add_item(struct k_sack* sack,struct k_item* item)
     sack->value += item->value;
 }
 
+/* k_partial_sack */
+struct k_partial_sack* k_partial_sack_new()
+{
+    int i;
+    struct k_partial_sack* psack;
+    psack = malloc(sizeof(struct k_partial_sack));
+    if (psack == NULL) {
+        fprintf(stderr,"%s: memory exception: fail malloc()\n",programName);
+        exit(EXIT_FAILURE);
+    }
+    psack->cost = 0;
+    psack->value = 0.0;
+    for (i = 0;i < 2;++i) {
+        psack->itemCap[i] = 4;
+        psack->itemSz[i] = 0;
+        psack->items[i] = malloc(sizeof(struct k_item*) * psack->itemCap[i]);
+        if (psack->items[i] == NULL) {
+            fprintf(stderr,"%s: memory exception: fail malloc()\n",programName);
+            exit(EXIT_FAILURE);
+        }
+    }
+    return psack;
+}
+void k_partial_sack_free(struct k_partial_sack* psack)
+{
+    int i;
+    for (i = 0;i < 2;++i)
+        free(psack->items[i]);
+    free(psack);
+}
+void k_partial_sack_add_item(struct k_partial_sack* psack,struct k_item* item,int cost)
+{
+    int index;
+    double value = item->value;
+    value *= (double)cost / item->cost;
+    index = value < item->value ? 1 : 0;
+    if (psack->itemSz[index] >= psack->itemCap[index]) {
+        struct k_item** newblock;
+        psack->itemCap[index] <<= 2;
+        newblock = realloc(psack->items[index],sizeof(struct k_item*)*psack->itemCap[index]);
+        if (newblock == NULL) {
+            fprintf(stderr,"%s: memory exception: fail realloc()\n",programName);
+            exit(EXIT_FAILURE);
+        }
+        psack->items[index] = newblock;
+    }
+    psack->items[index][psack->itemSz[index]++] = item;
+    psack->cost += cost;
+    psack->value += value;
+}
+void k_partial_sack_print(struct k_partial_sack* psack,const char* title)
+{
+    if (psack->itemSz[0]==0 && psack->itemSz[1]==0)
+        printf("\t[%s%s%s%s%s] solution: empty set\n",TERM_SETF,TERM_BOLD,title,TERM_SGR0,TERM_SETD);
+    else {
+        size_t i;
+        for (i = 0;i < 2;++i)
+            qsort(psack->items[i],psack->itemSz[i],sizeof(struct k_item*),(int (*)(const void*,const void*))itemcompar_name);
+        printf("\t[%s%s%s%s%s] solution: cost=%s%d%s, value=%s%f%s",TERM_SETF,TERM_BOLD,title,TERM_SGR0,TERM_SETD,TERM_SETF,psack->cost,
+            TERM_SETD,TERM_SETF,psack->value,TERM_SETD);
+        if (psack->itemSz[0] > 0) {
+            printf("\n\twhole-items:\t%s%s",TERM_BOLD,psack->items[0][0]->name);
+            for (i = 1;i < psack->itemSz[0];++i)
+                printf(i%10==0 ? ",\n\t%s" : ", %s",psack->items[0][i]->name);
+            printf("%s\n",TERM_SGR0);
+        }
+        if (psack->itemSz[1] > 0) {
+            printf("\tpartial-items:\t%s%s",TERM_BOLD,psack->items[1][0]->name);
+            for (i = 1;i < psack->itemSz[1];++i)
+                printf(i%10==0 ? ",\n\t%s" : ", %s",psack->items[1][i]->name);
+            printf("%s\n",TERM_SGR0);
+        }
+    }
+}
+
 /* k_solution */
 struct k_solution* k_solution_new()
 {
     struct k_solution* sol;
     sol = malloc(sizeof(struct k_solution));
+    if (sol == NULL) {
+        fprintf(stderr,"%s: memory exception: fail malloc()\n",programName);
+        exit(EXIT_FAILURE);
+    }
     sol->sackCounter = 0;
     sol->sack = NULL;
     return sol;
@@ -291,24 +409,29 @@ void knapsack(FILE* fin,const char* filename)
     size_t itemCap, itemSz;
     struct k_item** items;
     struct k_solution* solution;
+    struct k_partial_sack* partial;
     k_info_init();
     /* read in knapsack limit */
     readline(fin,linebuf,sizeof(linebuf));
     if (sscanf(linebuf,"%d",&globlInfo.limit) != 1) {
-        fprintf(stderr,"format error in file '%s': <cost-limit> was not an integer\n",filename);
+        fprintf(stderr,"%s: format error in file '%s': <cost-limit> field was not an integer\n",programName,filename);
         return;
     }
     /* read in set of possible items */
     itemCap = 4;
     itemSz = 0;
     items = malloc(sizeof(struct k_item*) * itemCap);
+    if (items == NULL) {
+        fprintf(stderr,"%s: memory exception: fail malloc()\n",programName);
+        exit(EXIT_FAILURE);
+    }
     while (1) {
         if (itemSz >= itemCap) {
             struct k_item** newblock;
             itemCap <<= 2;
             newblock = realloc(items,sizeof(struct k_item*) * itemCap);
             if (newblock == NULL) {
-                fprintf(stderr,"memory exception: fail realloc()\n");
+                fprintf(stderr,"%s: memory exception: fail realloc()\n",programName);
                 exit(EXIT_FAILURE);
             }
             items = newblock;
@@ -319,7 +442,7 @@ void knapsack(FILE* fin,const char* filename)
             s = linebuf;
             name = commasep(&s);
             if (sscanf(commasep(&s),"%d",&cost)!=1 || sscanf(commasep(&s),"%d",&value)!=1) {
-                fprintf(stderr,"format error in file '%s': bad item format for item %d\n",filename,(int)itemSz+1);
+                fprintf(stderr,"%s: format error in file '%s': bad item format for item %d\n",programName,filename,(int)itemSz+1);
                 free(items);
                 return;
             }
@@ -331,7 +454,7 @@ void knapsack(FILE* fin,const char* filename)
         }
     }
     if (itemSz <= 0) {
-        fprintf(stderr,"empty item set in file '%s'\n",filename);
+        fprintf(stderr,"%s: empty item set in file '%s'\n",programName,filename);
         free(items);
         return;
     }
@@ -351,9 +474,9 @@ void knapsack(FILE* fin,const char* filename)
     k_solution_print(solution,"greedy/highest ratio");
     k_info_update_lower_value_bound(solution);
     k_solution_free(solution);
-    solution = partial_knapsack(items,itemSz);
-    k_solution_print(solution,"partial knapsack");
-    k_solution_free(solution);
+    partial = partial_knapsack(items,itemSz);
+    k_partial_sack_print(partial,"partial knapsack");
+    k_partial_sack_free(partial);
     /* do an exhaustive search that optimizes out sub-trees that exceed cost limit */
     globlSolution = k_solution_new();
     knapsack_optimized1_recursive(items,k_sack_new());
@@ -490,11 +613,19 @@ struct k_solution* greedy_highest_ratio(struct k_item** items,size_t cnt)
     }
     return solution;
 }
-struct k_solution* partial_knapsack(struct k_item** items,size_t cnt)
+struct k_partial_sack* partial_knapsack(struct k_item** items,size_t cnt)
 {
-    struct k_solution* solution;
+    size_t iter;
+    int leftover;
+    struct k_partial_sack* sack;
     qsort(items,cnt,sizeof(struct k_item*),(int (*)(const void*,const void*))itemcompar_ratio);
-    solution = k_solution_new();
-
-    return solution;
+    sack = k_partial_sack_new();
+    leftover = globlInfo.limit;
+    for (iter = 0;iter < cnt;++iter) {
+        int cost = items[iter]->cost > leftover ? leftover : items[iter]->cost;
+        k_partial_sack_add_item(sack,items[iter],cost);
+        if ((leftover-=cost) <= 0)
+            break;
+    }
+    return sack;
 }
