@@ -13,7 +13,8 @@
 /* terminal codes */
 char TERM_BOLD[32] = "";
 char TERM_SGR0[32] = "";
-char TERM_SETF[32] = "";
+char TERM_SETF_BLUE[32] = "";
+char TERM_SETF_RED[32] = "";
 char TERM_SETD[32] = "";
 
 struct k_item
@@ -59,6 +60,7 @@ static void k_partial_sack_print(struct k_partial_sack* psack,const char* title)
 struct k_solution
 {
     size_t sackCounter; /* number of sacks considered before solution */
+    size_t nodeCounter; /* number of potential nodes processed during a solution run */
     struct k_sack* sack; /* solution knapsack */
 };
 static struct k_solution* globlSolution;
@@ -97,7 +99,8 @@ int main(int argc,const char* argv[])
         if (term!=NULL && setupterm(term,1,NULL)!=ERR) {
             strncpy(TERM_BOLD,tigetstr("bold"),sizeof(TERM_BOLD));
             strncpy(TERM_SGR0,tigetstr("sgr0"),sizeof(TERM_SGR0));
-            strncpy(TERM_SETF,tiparm(tigetstr("setaf"),4),sizeof(TERM_SETF));
+            strncpy(TERM_SETF_BLUE,tiparm(tigetstr("setaf"),4),sizeof(TERM_SETF_BLUE));
+            strncpy(TERM_SETF_RED,tiparm(tigetstr("setaf"),1),sizeof(TERM_SETF_RED));
             strncpy(TERM_SETD,tiparm(tigetstr("setaf"),9),sizeof(TERM_SETD));
         }
     }
@@ -287,13 +290,13 @@ void k_partial_sack_add_item(struct k_partial_sack* psack,struct k_item* item,in
 void k_partial_sack_print(struct k_partial_sack* psack,const char* title)
 {
     if (psack->itemSz[0]==0 && psack->itemSz[1]==0)
-        printf("\t[%s%s%s%s%s] solution: empty set\n",TERM_SETF,TERM_BOLD,title,TERM_SGR0,TERM_SETD);
+        printf("\t[%s%s%s%s%s] solution: empty set\n",TERM_SETF_BLUE,TERM_BOLD,title,TERM_SGR0,TERM_SETD);
     else {
         size_t i;
         for (i = 0;i < 2;++i)
             qsort(psack->items[i],psack->itemSz[i],sizeof(struct k_item*),(int (*)(const void*,const void*))itemcompar_name);
-        printf("\t[%s%s%s%s%s] solution: cost=%s%d%s, value=%s%f%s",TERM_SETF,TERM_BOLD,title,TERM_SGR0,TERM_SETD,TERM_SETF,psack->cost,
-            TERM_SETD,TERM_SETF,psack->value,TERM_SETD);
+        printf("\t[%s%s%s%s%s] solution: cost=%s%s%d%s%s, value=%s%s%f%s%s",TERM_SETF_BLUE,TERM_BOLD,title,TERM_SGR0,TERM_SETD,
+            TERM_SETF_RED,TERM_BOLD,psack->cost,TERM_SGR0,TERM_SETD,TERM_SETF_RED,TERM_BOLD,psack->value,TERM_SGR0,TERM_SETD);
         if (psack->itemSz[0] > 0) {
             printf("\n\twhole-items:\t%s%s",TERM_BOLD,psack->items[0][0]->name);
             for (i = 1;i < psack->itemSz[0];++i)
@@ -319,6 +322,7 @@ struct k_solution* k_solution_new()
         exit(EXIT_FAILURE);
     }
     sol->sackCounter = 0;
+    sol->nodeCounter = 0;
     sol->sack = NULL;
     return sol;
 }
@@ -342,14 +346,16 @@ int k_solution_check_sack(struct k_solution* sol,struct k_sack* sack)
 void k_solution_print(struct k_solution* sol,const char* title)
 {
     if (sol->sack==NULL || sol->sack->itemSz==0)
-        printf("\t[%s%s%s%s%s] solution: empty set\n",TERM_SETF,TERM_BOLD,title,TERM_SGR0,TERM_SETD);
+        printf("\t[%s%s%s%s%s] solution: empty set\n",TERM_SETF_BLUE,TERM_BOLD,title,TERM_SGR0,TERM_SETD);
     else {
         size_t i;
         qsort(sol->sack->items,sol->sack->itemSz,sizeof(struct k_item*),(int (*)(const void*,const void*))itemcompar_name);
-        printf("\t[%s%s%s%s%s] solution: cost=%s%d%s, value=%s%d%s",TERM_SETF,TERM_BOLD,title,TERM_SGR0,TERM_SETD,TERM_SETF,sol->sack->cost,
-            TERM_SETD,TERM_SETF,sol->sack->value,TERM_SETD);
+        printf("\t[%s%s%s%s%s] solution: cost=%s%s%d%s%s, value=%s%s%d%s%s",TERM_SETF_BLUE,TERM_BOLD,title,TERM_SGR0,TERM_SETD,
+            TERM_SETF_RED,TERM_BOLD,sol->sack->cost,TERM_SGR0,TERM_SETD,TERM_SETF_RED,TERM_BOLD,sol->sack->value,TERM_SGR0,TERM_SETD);
         if (sol->sackCounter > 0)
-            printf(", sack-count=%s%zu%s",TERM_SETF,sol->sackCounter,TERM_SETD);
+            printf(", sack-count=%s%s%zu%s%s",TERM_SETF_RED,TERM_BOLD,sol->sackCounter,TERM_SGR0,TERM_SETD);
+        if (sol->nodeCounter > 0)
+            printf(", node-count=%s%s%zu%s%s",TERM_SETF_RED,TERM_BOLD,sol->nodeCounter,TERM_SGR0,TERM_SETD);
         printf("\n\titems:\t%s%s",TERM_BOLD,sol->sack->items[0]->name);
         for (i = 1;i < sol->sack->itemSz;++i)
             printf(i%10==0 ? ",\n\t%s" : ", %s",sol->sack->items[i]->name);
@@ -458,8 +464,8 @@ void knapsack(FILE* fin,const char* filename)
         free(items);
         return;
     }
-    printf("[%s%s%s%s%s] with item-count=%s%zu%s and cost-limit=%s%d%s\n",TERM_SETF,TERM_BOLD,filename,TERM_SGR0,TERM_SETD,
-        TERM_SETF,itemSz,TERM_SETD,TERM_SETF,globlInfo.limit,TERM_SETD);
+    printf("[%s%s%s%s%s] with item-count=%s%s%zu%s%s and cost-limit=%s%s%d%s%s\n",TERM_SETF_BLUE,TERM_BOLD,filename,TERM_SGR0,TERM_SETD,
+        TERM_SETF_RED,TERM_BOLD,itemSz,TERM_SGR0,TERM_SETD,TERM_SETF_RED,TERM_BOLD,globlInfo.limit,TERM_SGR0,TERM_SETD);
     /* produce alternate solutions (greedy and partial); use these to
        compute lower and upper bounds on the best sack */
     solution = greedy_highest_value(items,itemSz);
@@ -501,6 +507,7 @@ void knapsack(FILE* fin,const char* filename)
 void knapsack_bruteforce_recursive(struct k_item** item,struct k_sack* sack)
 {
     struct k_sack* right;
+    ++globlSolution->nodeCounter;
     if (*item == NULL) {
         ++globlSolution->sackCounter;
         /* sack is a leaf sack; check it to see if it is a better
@@ -519,6 +526,7 @@ void knapsack_bruteforce_recursive(struct k_item** item,struct k_sack* sack)
 void knapsack_optimized1_recursive(struct k_item** item,struct k_sack* sack)
 {
     struct k_sack* right;
+    ++globlSolution->nodeCounter;
     if (*item == NULL) {
         ++globlSolution->sackCounter;
         if (!k_solution_check_sack(globlSolution,sack))
@@ -527,15 +535,16 @@ void knapsack_optimized1_recursive(struct k_item** item,struct k_sack* sack)
     }
     right = k_sack_copy(sack);
     k_sack_add_item(right,*item);
-    if (right->cost <= globlInfo.limit)
-        knapsack_optimized1_recursive(item+1,right);
+    knapsack_optimized1_recursive(item+1,right);
+    if (sack->cost <= globlInfo.limit)
+        knapsack_optimized1_recursive(item+1,sack);
     else
-        k_sack_free(right);
-    knapsack_optimized1_recursive(item+1,sack);
+        k_sack_free(sack);
 }
 int knapsack_optimized2_recursive(struct k_item** item,struct k_sack* sack)
 {
     struct k_sack* right;
+    ++globlSolution->nodeCounter;
     if (*item == NULL) {
         ++globlSolution->sackCounter;
         if (sack->value < globlInfo.lowerValueBound) {
@@ -548,15 +557,14 @@ int knapsack_optimized2_recursive(struct k_item** item,struct k_sack* sack)
     }
     right = k_sack_copy(sack);
     k_sack_add_item(right,*item);
-    if (right->cost <= globlInfo.limit) {
-        if (!knapsack_optimized2_recursive(item+1,right)) {
-            k_sack_free(sack);
-            return 0;
-        }
+    if (!knapsack_optimized2_recursive(item+1,right)) {
+        k_sack_free(sack);
+        return 0;
     }
+    if (sack->cost <= globlInfo.limit)
+        knapsack_optimized2_recursive(item+1,sack);
     else
-        k_sack_free(right);
-    knapsack_optimized2_recursive(item+1,sack);
+        k_sack_free(sack);
     return 1;
 }
 struct k_solution* greedy_highest_value(struct k_item** items,size_t cnt)
