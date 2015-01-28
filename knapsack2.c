@@ -84,6 +84,7 @@ static void knapsack(FILE* file,const char* filename);
 static void knapsack_bruteforce_recursive(struct k_item** item,struct k_sack* sack);
 static void knapsack_optimized1_recursive(struct k_item** item,struct k_sack* sack);
 static int knapsack_optimized2_recursive(struct k_item** item,struct k_sack* sack);
+static void knapsack_optimized3(struct k_item** item);
 static struct k_solution* greedy_highest_value(struct k_item** items,size_t cnt);
 static struct k_solution* greedy_lowest_cost(struct k_item** items,size_t cnt);
 static struct k_solution* greedy_highest_ratio(struct k_item** items,size_t cnt);
@@ -494,6 +495,11 @@ void knapsack(FILE* fin,const char* filename)
     knapsack_optimized2_recursive(items,k_sack_new());
     k_solution_print(globlSolution,"optimized2");
     k_solution_free(globlSolution);
+    /* better form of the above */
+    globlSolution = k_solution_new();
+    knapsack_optimized3(items);
+    k_solution_print(globlSolution,"optimized3");
+    k_solution_free(globlSolution);
     /* do a brute-force exhaustive search that explores all of the candidate
        solutions; the k_solution will find the best sack as it generates them */
     globlSolution = k_solution_new();
@@ -566,6 +572,38 @@ int knapsack_optimized2_recursive(struct k_item** item,struct k_sack* sack)
     else
         k_sack_free(sack);
     return 1;
+}
+static void knapsack_optimized3_recursive(struct k_item** item,struct k_sack* sack,int potential)
+{
+    ++globlSolution->nodeCounter;
+    if (*item == NULL) {
+        ++globlSolution->sackCounter;
+        if (!k_solution_check_sack(globlSolution,sack))
+            k_sack_free(sack);
+        return;
+    }
+    if (potential >= globlInfo.lowerValueBound) {
+        struct k_sack* right;
+        right = k_sack_copy(sack);
+        k_sack_add_item(right,*item);
+        knapsack_optimized3_recursive(item+1,right,potential);
+        if (sack->cost <= globlInfo.limit)
+            knapsack_optimized3_recursive(item+1,sack,potential - (*item)->value);
+        else
+            k_sack_free(sack);
+    }
+    else
+        k_sack_free(sack);
+}
+void knapsack_optimized3(struct k_item** item)
+{
+    int sum = 0;
+    struct k_item** iter = item;
+    while (*iter != NULL) {
+        sum += (*iter)->value;
+        ++iter;
+    }
+    knapsack_optimized3_recursive(item,k_sack_new(),sum);
 }
 struct k_solution* greedy_highest_value(struct k_item** items,size_t cnt)
 {
