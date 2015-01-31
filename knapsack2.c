@@ -6,9 +6,11 @@
 #include <string.h>
 #include <ctype.h>
 #include <errno.h>
+#ifdef FEAT_LINUX_TINFO
 #include <curses.h>
 #include <term.h>
 #include <unistd.h>
+#endif
 
 /* terminal codes */
 char TERM_BOLD[32] = "";
@@ -94,6 +96,7 @@ static const char* programName;
 int main(int argc,const char* argv[])
 {
     programName = argv[0];
+#ifdef FEAT_LINUX_TINFO
     /* setup terminal information if stdout is a terminal */
     if (isatty(STDOUT_FILENO)) {
         const char* term = getenv("TERM");
@@ -105,6 +108,7 @@ int main(int argc,const char* argv[])
             strncpy(TERM_SETD,tiparm(tigetstr("setaf"),9),sizeof(TERM_SETD));
         }
     }
+#endif
     /* perform knapsack computations on instance input; if no file names
        were supplied, read from standard input */
     if (argc > 1) {
@@ -299,15 +303,17 @@ void k_partial_sack_print(struct k_partial_sack* psack,const char* title)
         printf("\t[%s%s%s%s%s] solution: cost=%s%s%d%s%s, value=%s%s%f%s%s",TERM_SETF_BLUE,TERM_BOLD,title,TERM_SGR0,TERM_SETD,
             TERM_SETF_RED,TERM_BOLD,psack->cost,TERM_SGR0,TERM_SETD,TERM_SETF_RED,TERM_BOLD,psack->value,TERM_SGR0,TERM_SETD);
         if (psack->itemSz[0] > 0) {
-            printf("\n\twhole-items:\t%s%s",TERM_BOLD,psack->items[0][0]->name);
+            printf("\n\titems:\t%s%s",TERM_BOLD,psack->items[0][0]->name);
             for (i = 1;i < psack->itemSz[0];++i)
-                printf(i%10==0 ? ",\n\t%s" : ", %s",psack->items[0][i]->name);
+                printf(i%10==0 ? ",\n\t\t%s" : ", %s",psack->items[0][i]->name);
             printf("%s\n",TERM_SGR0);
         }
+        else
+            fputc('\n',stdout);
         if (psack->itemSz[1] > 0) {
-            printf("\tpartial-items:\t%s%s",TERM_BOLD,psack->items[1][0]->name);
+            printf("\tparts:\t%s%s",TERM_BOLD,psack->items[1][0]->name);
             for (i = 1;i < psack->itemSz[1];++i)
-                printf(i%10==0 ? ",\n\t%s" : ", %s",psack->items[1][i]->name);
+                printf(i%10==0 ? ",\n\t\t%s" : ", %s",psack->items[1][i]->name);
             printf("%s\n",TERM_SGR0);
         }
     }
@@ -359,7 +365,7 @@ void k_solution_print(struct k_solution* sol,const char* title)
             printf(", node-count=%s%s%zu%s%s",TERM_SETF_RED,TERM_BOLD,sol->nodeCounter,TERM_SGR0,TERM_SETD);
         printf("\n\titems:\t%s%s",TERM_BOLD,sol->sack->items[0]->name);
         for (i = 1;i < sol->sack->itemSz;++i)
-            printf(i%10==0 ? ",\n\t%s" : ", %s",sol->sack->items[i]->name);
+            printf(i%10==0 ? ",\n\t\t%s" : ", %s",sol->sack->items[i]->name);
         printf("%s\n",TERM_SGR0);
     }
 }
@@ -484,6 +490,7 @@ void knapsack(FILE* fin,const char* filename)
     partial = partial_knapsack(items,itemSz);
     k_partial_sack_print(partial,"partial knapsack");
     k_partial_sack_free(partial);
+    goto skip;
     /* do an exhaustive search that optimizes out sub-trees that exceed cost limit */
     globlSolution = k_solution_new();
     knapsack_optimized1_recursive(items,k_sack_new());
@@ -495,10 +502,11 @@ void knapsack(FILE* fin,const char* filename)
     knapsack_optimized2_recursive(items,k_sack_new());
     k_solution_print(globlSolution,"optimized2");
     k_solution_free(globlSolution);
-    /* better form of the above */
+skip:
+    /* do the best optimization of exhaustive search; this is like the above but better */
     globlSolution = k_solution_new();
     knapsack_optimized3(items);
-    k_solution_print(globlSolution,"optimized3");
+    k_solution_print(globlSolution,"optimized");
     k_solution_free(globlSolution);
     /* do a brute-force exhaustive search that explores all of the candidate
        solutions; the k_solution will find the best sack as it generates them */
@@ -582,15 +590,12 @@ static void knapsack_optimized3_recursive(struct k_item** item,struct k_sack* sa
             k_sack_free(sack);
         return;
     }
-    if (potential >= globlInfo.lowerValueBound) {
+    if (potential>=globlInfo.lowerValueBound && sack->cost<=globlInfo.limit) {
         struct k_sack* right;
         right = k_sack_copy(sack);
         k_sack_add_item(right,*item);
         knapsack_optimized3_recursive(item+1,right,potential);
-        if (sack->cost <= globlInfo.limit)
-            knapsack_optimized3_recursive(item+1,sack,potential - (*item)->value);
-        else
-            k_sack_free(sack);
+        knapsack_optimized3_recursive(item+1,sack,potential - (*item)->value);
     }
     else
         k_sack_free(sack);
