@@ -229,7 +229,7 @@ void k_sack_add_item(struct k_sack* sack,struct k_item* item)
 {
     if (sack->itemSz >= sack->itemCap) {
         struct k_item** newblock;
-        sack->itemCap <<= 2;
+        sack->itemCap <<= 1;
         newblock = realloc(sack->items,sizeof(struct k_item*)*sack->itemCap);
         if (newblock == NULL) {
             fprintf(stderr,"%s: memory exception: fail realloc()\n",programName);
@@ -280,7 +280,7 @@ void k_partial_sack_add_item(struct k_partial_sack* psack,struct k_item* item,in
     index = value < item->value ? 1 : 0;
     if (psack->itemSz[index] >= psack->itemCap[index]) {
         struct k_item** newblock;
-        psack->itemCap[index] <<= 2;
+        psack->itemCap[index] <<= 1;
         newblock = realloc(psack->items[index],sizeof(struct k_item*)*psack->itemCap[index]);
         if (newblock == NULL) {
             fprintf(stderr,"%s: memory exception: fail realloc()\n",programName);
@@ -441,7 +441,7 @@ void knapsack(FILE* fin,const char* filename)
     while (1) {
         if (itemSz >= itemCap) {
             struct k_item** newblock;
-            itemCap <<= 2;
+            itemCap <<= 1;
             newblock = realloc(items,sizeof(struct k_item*) * itemCap);
             if (newblock == NULL) {
                 fprintf(stderr,"%s: memory exception: fail realloc()\n",programName);
