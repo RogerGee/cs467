@@ -8,11 +8,6 @@
 #include <ctype.h>
 #include <math.h>
 #include <time.h>
-#ifdef FEAT_LINUX_TINFO
-#include <curses.h>
-#include <term.h>
-#include <unistd.h>
-#endif
 
 /* CONSTANTS ------------------------- */
 
@@ -21,13 +16,6 @@ enum gak_constants
     GAK_POPULATION_LIMIT = 100,
     GAK_UNINITIALIZED_VALUE = -1
 };
-
-const char SMCUP[32] = "";
-const char BOLD[32] = "";
-const char SGR0[32] = "";
-const char SETF_BLUE[32] = "";
-const char SETF_RED[32] = "";
-const char SETD[32] = "";
 
 /* TYPEDEFS -------------------------- */
 
@@ -64,7 +52,9 @@ struct gak_candidate
 struct gak_candidate* gak_candidate_new_random(struct gak_instance* inst);
 struct gak_candidate* gak_candidate_new_crossover(struct gak_instance* inst,struct gak_candidate** parents,crossover_func func);
 void gak_candidate_free(struct gak_candidate* cand);
+void gak_candidate_mutate(struct gak_candidate* cand,struct gak_instance* inst,size_t numBits);
 void gak_candidate_print(struct gak_candidate* cand,struct gak_instance* inst);
+bool gak_candidate_compare(struct gak_candidate* candA,struct gak_candidate* candB,struct gak_instance* inst);
 
 /* represent a set of candidates (population) */
 struct gak_population
@@ -78,7 +68,8 @@ void gak_population_free(struct gak_population* popl);
 bool gak_population_breed_frombest(struct gak_population* popl,struct gak_instance* inst,crossover_func func);
 bool gak_population_breed_tophalf(struct gak_population* popl,struct gak_instance* inst,crossover_func func);
 bool gak_population_breed_threshold(struct gak_population* popl,struct gak_instance* inst,crossover_func func);
-bool gak_population_check_homogenous(struct gak_population* popl);
+bool gak_population_breed_weighted(struct gak_population* popl,struct gak_instance* inst,crossover_func func);
+bool gak_population_check_homogenous(struct gak_population* popl,struct gak_instance* inst);
 void gak_population_cataclysmic_mutation(struct gak_population* popl,struct gak_instance* inst);
 void gak_population_print(struct gak_population* popl,struct gak_instance* inst);
 
@@ -90,7 +81,10 @@ struct gak_instance
     size_t itemSz, itemCap;
     struct gak_item** items;
 
+    size_t bitcnt;
     size_t bytecnt;
+
+    bool nonZeroSol;
 };
 struct gak_instance* gak_instance_new(FILE* fin,const char* filename);
 void gak_instance_free(struct gak_instance* inst);
@@ -108,6 +102,7 @@ static void gak_fatal_error(bool useErrno,const char* format, ...);
 static int readline(FILE* fin,char* buf,size_t cap);
 static char* commasep(char** s);
 static int gak_candidate_compar_byfitness(const struct gak_candidate** left,const struct gak_candidate** right);
+static void zero_last_bits(uint8_t* byte,size_t lastBits);
 
 /* GLOBALS --------------------------- */
 
@@ -139,6 +134,13 @@ int main(int argc,const char* argv[])
     else
         ga_knapsack(stdin,"stdin");
     return 0;
+}
+
+/* INLINE HELPERS -------------------- */
+
+static inline int min(int a,int b)
+{
+    return a<b ? a : b;
 }
 
 /* IMPLEMENTATION -------------------- */
@@ -178,6 +180,7 @@ struct gak_candidate* gak_candidate_new_random(struct gak_instance* inst)
     cand->bits = malloc(inst->bytecnt);
     if (cand->bits == NULL)
         gak_fatal_error(false,"memory allocation failure");
+    memset(cand->bits,0,inst->bytecnt);
     for (i = 0;i < inst->bytecnt;++i) {
         size_t j;
         uint8_t* p;
@@ -187,6 +190,8 @@ struct gak_candidate* gak_candidate_new_random(struct gak_instance* inst)
         for (j = 0;j < sizeof(uint32_t);++j)
             cand->bits[i] = *p++;
     }
+    /* make sure the unused bits on the last byte are zeroed out */
+    zero_last_bits(cand->bits+i-1,inst->bitcnt % inst->itemSz);
     gak_instance_apply_metrics(inst,cand);
     return cand;
 }
@@ -203,6 +208,8 @@ struct gak_candidate* gak_candidate_new_crossover(struct gak_instance* inst,stru
     memset(cand->bits,0,inst->bytecnt);
     /* set child's genes and compile metrics */
     func(parents[0]->bits,parents[1]->bits,cand->bits,inst->itemSz);
+    /* make sure the unused bits on the last byte are zeroed out */
+    zero_last_bits(cand->bits+inst->bytecnt-1,inst->bitcnt % inst->itemSz);
     gak_instance_apply_metrics(inst,cand);
     return cand;
 }
@@ -210,6 +217,16 @@ void gak_candidate_free(struct gak_candidate* cand)
 {
     free(cand->bits);
     free(cand);
+}
+void gak_candidate_mutate(struct gak_candidate* cand,struct gak_instance* inst,size_t numBits)
+{
+    size_t iter, t, u;
+    for (iter = 0;iter < numBits;++iter) {
+        t = rand() % inst->itemSz;
+        u = t % 8;
+        t /= 8;
+        cand->bits[t] ^= cand->bits[t] & (0x1<<u);
+    }
 }
 void gak_candidate_print(struct gak_candidate* cand,struct gak_instance* inst)
 {
@@ -228,6 +245,14 @@ void gak_candidate_print(struct gak_candidate* cand,struct gak_instance* inst)
         }
     }
     putchar('\n');
+}
+bool gak_candidate_compare(struct gak_candidate* candA,struct gak_candidate* candB,struct gak_instance* inst)
+{
+    size_t i;
+    for (i = 0;i < inst->bytecnt;++i)
+        if (candA->bits[i] != candB->bits[i])
+            return false;
+    return true;
 }
 
 /* gak_population */
@@ -253,11 +278,11 @@ void gak_population_free(struct gak_population* popl)
         gak_candidate_free(popl->members[i]);
     free(popl);
 }
-static bool gak_population_breed(struct gak_population* popl,struct gak_candidate* offspring,size_t threshold)
+static bool gak_population_breed(struct gak_population* popl,struct gak_candidate* offspring,struct gak_instance* inst,size_t threshold)
 {
     size_t iter;
     iter = 0;
-    while (iter<GAK_POPULATION_LIMIT && offspring->fitness<=popl->members[iter]->fitness)
+    while (iter<GAK_POPULATION_LIMIT && offspring->fitness<popl->members[iter]->fitness)
         ++iter;
     if (iter >= GAK_POPULATION_LIMIT)
         /* offspring wasn't better than any of the population members */
@@ -270,6 +295,9 @@ static bool gak_population_breed(struct gak_population* popl,struct gak_candidat
         for (i = last;i > iter;--i)
             popl->members[i] = popl->members[i-1];
         popl->members[iter] = offspring;
+        /* the offspring has a chance for mutation */
+        if (rand() % 47 == 0)
+            gak_candidate_mutate(offspring,inst,inst->bitcnt);
     }
     return iter <= threshold;
 }
@@ -279,7 +307,7 @@ bool gak_population_breed_frombest(struct gak_population* popl,struct gak_instan
     /* generate an offspring using the specified combining function; use
        the best two population candidates so far as parents */
     offspring = gak_candidate_new_crossover(inst,popl->members,func);
-    return gak_population_breed(popl,offspring,1);
+    return gak_population_breed(popl,offspring,inst,1);
 }
 bool gak_population_breed_tophalf(struct gak_population* popl,struct gak_instance* inst,crossover_func func)
 {
@@ -294,7 +322,7 @@ bool gak_population_breed_tophalf(struct gak_population* popl,struct gak_instanc
     parents[0] = popl->members[r[0]];
     parents[1] = popl->members[r[1]];
     offspring = gak_candidate_new_crossover(inst,parents,func);
-    return gak_population_breed(popl,offspring,1);
+    return gak_population_breed(popl,offspring,inst,1);
 }
 bool gak_population_breed_threshold(struct gak_population* popl,struct gak_instance* inst,crossover_func func)
 {
@@ -329,15 +357,32 @@ bool gak_population_breed_threshold(struct gak_population* popl,struct gak_insta
     parents[0] = popl->members[r[0]];
     parents[1] = popl->members[r[1]];
     offspring = gak_candidate_new_crossover(inst,parents,func);
-    return gak_population_breed(popl,offspring,1);
+    return gak_population_breed(popl,offspring,inst,1);
 }
-bool gak_population_check_homogenous(struct gak_population* popl)
+bool gak_population_breed_weighted(struct gak_population* popl,struct gak_instance* inst,crossover_func func)
 {
-    int fit;
+    int r[2];
+    struct gak_candidate* parents[2];
+    struct gak_candidate* offspring;
+    do {
+        int i;
+        for (i = 0;i < 2;++i) {
+            int a, b;
+            a = rand() % GAK_POPULATION_LIMIT;
+            b = rand() % GAK_POPULATION_LIMIT;
+            r[i] = min(a,b);
+        }
+    } while (r[0] == r[1]);
+    parents[0] = popl->members[r[0]];
+    parents[1] = popl->members[r[1]];
+    offspring = gak_candidate_new_crossover(inst,parents,func);
+    return gak_population_breed(popl,offspring,inst,1);
+}
+bool gak_population_check_homogenous(struct gak_population* popl,struct gak_instance* inst)
+{
     size_t iter;
-    fit = popl->members[0]->fitness;
     for (iter = 1;iter < GAK_POPULATION_LIMIT;++iter)
-        if (popl->members[iter]->fitness != fit)
+        if ( !gak_candidate_compare(popl->members[0],popl->members[iter],inst) )
             return false;
     return true;
 }
@@ -346,11 +391,11 @@ void gak_population_cataclysmic_mutation(struct gak_population* popl,struct gak_
     /* keep only the first member intact; randomly influence a random number of genes of each
        remaining member */
     size_t iter, i, t;
-    for (iter = 1;iter < GAK_POPULATION_LIMIT/2;++iter) {
+    for (iter = 1;iter < GAK_POPULATION_LIMIT/4;++iter) {
         /* use genes from the best candidate */
         for (i = 0;i < inst->bytecnt;++i)
           popl->members[iter]->bits[i] = popl->members[0]->bits[i];
-        for (i = 0;i < 1;++i) {
+        for (i = 0;i < inst->itemSz/2;++i) {
             size_t u;
             /* generate random position */
             t = rand() % inst->itemSz;
@@ -371,6 +416,8 @@ void gak_population_cataclysmic_mutation(struct gak_population* popl,struct gak_
             for (t = 0;t < sizeof(uint32_t);++t)
                 popl->members[iter]->bits[t] = *p++;
         }
+        /* make sure the unused bits on the last byte are zeroed out */
+        zero_last_bits(popl->members[iter]->bits+i-1,inst->bitcnt % inst->itemSz);
         gak_instance_apply_metrics(inst,popl->members[iter]);
     }
 }
@@ -400,6 +447,7 @@ struct gak_instance* gak_instance_new(FILE* fin,const char* filename)
     inst->itemSz = 0;
     inst->itemCap = 8;
     inst->items = malloc(sizeof(struct gak_item*) * inst->itemCap);
+    inst->nonZeroSol = false; /* is there at least one item that can fit in a sack? */
     if (inst->items == NULL)
         gak_fatal_error(false,"memory allocation failure");
     while (true) {
@@ -430,6 +478,8 @@ struct gak_instance* gak_instance_new(FILE* fin,const char* filename)
                 gak_instance_free(inst);
                 return NULL;
             }
+            if (cost < inst->costLimit)
+                inst->nonZeroSol = true;
             inst->items[inst->itemSz++] = gak_item_new(cost,value,name);
         }
         else {
@@ -446,6 +496,7 @@ struct gak_instance* gak_instance_new(FILE* fin,const char* filename)
        the candidates' item bitstring */
     inst->bytecnt = inst->itemSz/8;
     inst->bytecnt += inst->itemSz%8>0 ? 1 : 0;
+    inst->bitcnt = inst->bytecnt * 8;
     return inst;
 }
 void gak_instance_free(struct gak_instance* inst)
@@ -541,7 +592,16 @@ char* commasep(char** s)
 }
 int gak_candidate_compar_byfitness(const struct gak_candidate** left,const struct gak_candidate** right)
 {
-    return  (*right)->fitness - (*left)->fitness;
+    return (*right)->fitness - (*left)->fitness;
+}
+void zero_last_bits(uint8_t* byte,size_t lastBits)
+{
+    uint8_t pattern = 0xff;
+    while (lastBits > 0) {
+        pattern &= ~(0x01 << (8-lastBits));
+        --lastBits;
+    }
+    *byte &= pattern;
 }
 
 void crossover_random(const uint8_t* bitsParentA,const uint8_t* bitsParentB,uint8_t* bitsChild,size_t bits)
@@ -551,10 +611,8 @@ void crossover_random(const uint8_t* bitsParentA,const uint8_t* bitsParentB,uint
     pnt = rand() % bits;
     while (bits > 0) {
         t = bits>8 ? 8 : bits;
-        if (t > 8)
-            t = 8;
         for (i = 0;i < t;++i)
-            *bitsChild |= (bits>=pnt ? *bitsParentA : *bitsParentB) & (0x1<<i);
+            *bitsChild |= (bits-i>=pnt ? *bitsParentA : *bitsParentB) & (0x1<<i);
         bits -= t;
         if (t == 8) {
             ++bitsParentA;
@@ -565,20 +623,52 @@ void crossover_random(const uint8_t* bitsParentA,const uint8_t* bitsParentB,uint
 }
 void crossover_alternate(const uint8_t* bitsParentA,const uint8_t* bitsParentB,uint8_t* bitsChild,size_t bits)
 {
-    bool toggle = true;
-    while (bits > 0) {
-        size_t i, t;
-        t = bits>8 ? 8 : bits;
-        for (i = 0;i < t;++i) {
-            *bitsChild |= toggle ? (*bitsParentA & (0x1<<i)) : (*bitsParentB & (0x1<<i));
-            toggle = !toggle;
+    size_t a, b;
+    size_t ai, bi;
+    size_t aj, bj;
+    bool toggle = false;
+    a = 0, b = 0;
+    ai = 0, bi = 0;
+    aj = 0, bj = 0;
+    while (ai<bits && bi<bits) {
+        size_t* t[3];
+        const uint8_t** parent;
+        if (toggle) {
+            t[0] = &a;
+            t[1] = &ai;
+            t[2] = &aj;
+            parent = &bitsParentA;
         }
-        bits -= t;
-        ++bitsParentA;
-        ++bitsParentB;
-        ++bitsChild;
+        else {
+            t[0] = &b;
+            t[1] = &bi;
+            t[2] = &bj;
+            parent = &bitsParentB;
+        }
+        /* find non-zero bit in parent (if any) */
+        while (*t[1] < bits && (**parent & (0x1 << *t[0])) == 0) {
+            ++(*t[0]);
+            ++(*t[1]);
+            if (*t[0] >= 8) {
+                ++(*parent);
+                *t[0] = 0;
+                ++(*t[2]);
+            }
+        }
+        if (*t[1] < bits) {
+            bitsChild[*t[2]] |= 0x1 << *t[0];
+            ++(*t[0]);
+            ++(*t[1]);
+            if (*t[0] >= 8) {
+                ++(*parent);
+                *t[0] = 0;
+                ++(*t[2]);
+            }
+        }
+        toggle = !toggle;
     }
 }
+
 
 /* main program operation */
 void ga_knapsack(FILE* fin,const char* filename)
@@ -602,9 +692,9 @@ void ga_knapsack(FILE* fin,const char* filename)
     totalMutations = 0;
     do {
         /* breed in the population until a homogenous population is found */
-        gak_population_breed_threshold(popl,inst,crossoverFunctions[rand()%2]);
+        gak_population_breed_weighted(popl,inst,crossoverFunctions[rand()%2]);
         ++cycles;
-    } while (cycles<1000000 && !gak_population_check_homogenous(popl));
+    } while (cycles<1000000 && !gak_population_check_homogenous(popl,inst));
     totalCycles += cycles;
     fit = popl->members[0]->fitness;
     cnt = 3;
@@ -614,9 +704,9 @@ void ga_knapsack(FILE* fin,const char* filename)
         ++totalMutations;
         cycles = 0;
         do {
-            gak_population_breed_threshold(popl,inst,crossoverFunctions[rand()%2]);
+            gak_population_breed_weighted(popl,inst,crossoverFunctions[rand()%2]);
             ++cycles;
-        } while (cycles<1000000 && !gak_population_check_homogenous(popl));
+        } while (cycles<1000000 && !gak_population_check_homogenous(popl,inst));
         totalCycles += cycles;
         --cnt;
         if (popl->members[0]->fitness > fit) {
