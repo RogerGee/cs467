@@ -7,17 +7,28 @@ if len(sys.argv) <= 1:
     exit(1)
 
 number = int(sys.argv[1])
+if number <= 0:
+    print "enter positive number of items"
+    exit(1)
+lower = number/2 if number!=1 else 1
+upper = number * 5
 
 random.seed()
-limit = random.randint(number,number*10)
+limit = random.randint(number*5,number*15)
+
+table = set()
 
 print limit
 for i in range(number):
-    s = ""
-    for j in range(random.randint(5,10)):
-        s += random.choice(string.ascii_lowercase)
+    while True:
+        s = ""
+        for j in range(random.randint(1,1+number/26)):
+            s += random.choice(string.ascii_lowercase)
+        if not s in table:
+            break
+    table.add(s)
 
-    c = random.randint(number/2,number*5)
-    v = random.randint(number/2,number*5)
+    c = random.randint(lower,upper)
+    v = random.randint(lower,upper)
 
     print s+","+str(c)+","+str(v)
