@@ -10,23 +10,25 @@ endif
 ifdef MAKE_DEBUG
 PROJECT1 = knapsack-debug
 PROJECT2 = ga-knapsack-debug
+PROJECT3 = ga-graph-color-debug
 
-BUILD = gcc -g -Wall -Werror -Wextra -Wshadow -pedantic-errors -Wfatal-errors -Wno-unused-variable -Wno-unused-parameter -std=gnu99
+BUILD = gcc -g -Wall -Werror -Wextra -Wshadow -pedantic-errors -Wfatal-errors -Wno-unused-variable -Wno-unused-parameter -Wno-unused-function -std=gnu99
 else
 PROJECT1 = knapsack
 PROJECT2 = ga-knapsack
+PROJECT3 = ga-graph-color
 
 BUILD = gcc -s -O3 -Wall -Werror -Wextra -Wshadow -pedantic-errors -Wfatal-errors -Wno-unused-function -std=gnu99
 endif
-MACRO = -DFEAT_LINUX_TINFO
-LIB = -ltinfo -lm
 
 # rules
 
-all: $(PROJECT1) $(PROJECT2)
-debug: $(PROJECT1) $(PROJECT2)
+all: $(PROJECT1) $(PROJECT2) $(PROJECT3)
+debug: $(PROJECT1) $(PROJECT2) $(PROJECT3)
 
 $(PROJECT1): knapsack2.c
-	$(BUILD) -o$(PROJECT1) $(MACRO) knapsack2.c $(LIB)
+	$(BUILD) -o$(PROJECT1) -DFEAT_LINUX_TINFO knapsack2.c -ltinfo -lm
 $(PROJECT2): ga-knapsack.c
-	$(BUILD) -o$(PROJECT2) $(MACRO) ga-knapsack.c $(LIB)
+	$(BUILD) -o$(PROJECT2) ga-knapsack.c
+$(PROJECT3): ga-graph-color.c
+	$(BUILD) -o$(PROJECT3) ga-graph-color.c -ldstructs
