@@ -420,6 +420,8 @@ void gak_population_cataclysmic_mutation(struct gak_population* popl,struct gak_
         zero_last_bits(popl->members[iter]->bits+i-1,inst->bitcnt % inst->itemSz);
         gak_instance_apply_metrics(inst,popl->members[iter]);
     }
+    /* we have to resort the population after making all those changes */
+    qsort(popl->members,GAK_POPULATION_LIMIT,sizeof(struct gak_candidate*),(compar_func)gak_candidate_compar_byfitness);
 }
 void gak_population_print(struct gak_population* popl,struct gak_instance* inst)
 {

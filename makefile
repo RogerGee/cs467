@@ -29,6 +29,6 @@ debug: $(PROJECT1) $(PROJECT2) $(PROJECT3)
 $(PROJECT1): knapsack2.c
 	$(BUILD) -o$(PROJECT1) -DFEAT_LINUX_TINFO knapsack2.c -ltinfo -lm
 $(PROJECT2): ga-knapsack.c
-	$(BUILD) -o$(PROJECT2) ga-knapsack.c
+	$(BUILD) -o$(PROJECT2) ga-knapsack.c -lm
 $(PROJECT3): ga-graph-color.c
 	$(BUILD) -o$(PROJECT3) ga-graph-color.c -ldstructs
