@@ -77,6 +77,7 @@ static void knowledge_free(struct knowledge* knowledge);
 
 /* misc functions */
 static int compar_board(const gameboard left,const gameboard right);
+static int compar_decision(const struct decision** left,const struct decision** right);
 
 /* top-level operations */
 static struct turn_node* get_move_reaction(struct treemap* reactions,const gameboard newboard);
@@ -103,8 +104,13 @@ int main(int argc,const char* argv[])
             struct decision* decision;
             enum board_state state;
             fputs("your turn: ",stdout);
-            while (scanf("%d %d",&x,&y) != 2)
+            while (scanf("%d %d",&x,&y) != 2) {
+                char c;
+                do {
+                    c = fgetc(stdin);
+                } while (c != '\n');
                 fputs("bad input, try again: ",stdout);
+            }
             x += y*3;
             if (x>=9 || board[x] != EMPTY) {
                 puts("you cannot play there!");
@@ -274,7 +280,7 @@ void gameboard_print(gameboard board,int indentLevel)
 /* 'struct turn_node' */
 struct turn_node* turn_node_new(const gameboard board)
 {
-    int i, win;
+    int i/*, win*/;
     struct turn_node* node;
     node = malloc(sizeof(struct turn_node));
     memcpy(node->board,board,sizeof(gameboard));
@@ -284,24 +290,25 @@ struct turn_node* turn_node_new(const gameboard board)
     node->sum = 0;
     node->lastMove = -1;
     dynamic_array_init_ex(&node->actions,9);
-    win = -1; /* no winning move initially */
+    /*win = -1;*/ /* no winning move initially */
     for (i = 0;i < 9;++i) {
         if (node->board[i] == EMPTY) {
             struct decision* ndecision = decision_new(i,100);
             node->sum += 100;
             dynamic_array_pushback(&node->actions,ndecision);
-            if (gameboard_would_move(node->board,O,ndecision->pos) == move_win)
+            /* I DO NOT want to do this; I want to see if the agent can learn these rules */
+            /*if (gameboard_would_move(node->board,O,ndecision->pos) == move_win)
                 win = (int)node->actions.da_top - 1;
             else if (win == -1 && gameboard_would_move(node->board,X,ndecision->pos) == move_win)
-                win = (int)node->actions.da_top - 1;
+                win = (int)node->actions.da_top - 1;*/
         }
     }
-    if (win > -1) { /* make a winning move certain */
+    /*if (win > -1) { *//* make a winning move certain *//*
         for (i = 0;i < (int)node->actions.da_top;++i)
             if (win != i)
                 ((struct decision*)node->actions.da_data[i])->worth = 0;
         ((struct decision*)node->actions.da_data[win])->worth = node->sum;
-    }
+    }*/
     return node;
 }
 struct turn_node* turn_node_new_fromnone()
@@ -338,48 +345,56 @@ void turn_node_mark_good(struct turn_node* node)
 {
     /* the last move contributed to a win, so increase its probability */
     int i, cnt, take;
-    struct decision* decision;
-    decision = (struct decision*)node->actions.da_data[node->lastMove];
-    take = ((int)node->actions.da_top-1) + 100;
-    decision->worth += take;
-    if (decision->worth > node->sum || decision->worth < 0)
-        decision->worth = node->sum;
-    i = 0; cnt = 1;
-    while (cnt < (int)node->actions.da_top && take > 0) {
-        if (i != node->lastMove) {
-            decision = (struct decision*)node->actions.da_data[i];
-            if (decision->worth <= 0)
-                ++cnt;
-            else {
-                --decision->worth;
-                --take;
+    struct decision* original;
+    if (node->actions.da_top > 1) {
+        original = (struct decision*)node->actions.da_data[node->lastMove];
+        take = (int)node->actions.da_top - 1 + (8 - gameboard_count_empty(node->board)) * 50;
+        original->worth += take;
+        i = 0; cnt = 1;
+        while (cnt < (int)node->actions.da_top && take > 0) {
+            if (i != node->lastMove) {
+                struct decision* decision;
+                decision = (struct decision*)node->actions.da_data[i];
+                if (decision->worth <= 0)
+                    ++cnt;
+                else {
+                    --decision->worth;
+                    --take;
+                }
             }
+            if (++i >= (int)node->actions.da_top)
+                i = 0;
         }
-        if (++i >= (int)node->actions.da_top)
-            i = 0;
+        original->worth -= take;
     }
 }
 void turn_node_mark_bad(struct turn_node* node)
 {
     /* the last move contributed to a loss, so decrease its probability */
-    int i, give;
-    struct decision* decision;
     if (node->actions.da_top > 1) {
+        int i, j, give;
+        struct decision* decision;
+        struct decision* list[9];
         decision = (struct decision*)node->actions.da_data[node->lastMove];
-        give = ((int)node->actions.da_top-1) + 50;
+        give = /*(int)node->actions.da_top - 1 + (8 - gameboard_count_empty(node->board)) * 25*/ decision->worth;
         decision->worth -= give;
         if (decision->worth < 0) {
             give += decision->worth;
             decision->worth = 0;
         }
+        for (i = 0,j = 0;i < (int)node->actions.da_top;++i)
+            if (i != node->lastMove)
+                list[j++] = (struct decision*)node->actions.da_data[i];
+        /* sort decisions and give points back based on how many the decisions already have */
+        qsort(list,(size_t)j,sizeof(struct decision*),(int (*)(const void*,const void*))compar_decision);
         i = 0;
         while (give > 0) {
-            if (i != node->lastMove) {
-                decision = (struct decision*)node->actions.da_data[i];
-                ++decision->worth;
-                --give;
-            }
-            if (++i >= (int)node->actions.da_top)
+            int amt = 25*(j-i);
+            if (amt > give)
+                amt = give;
+            list[i]->worth += amt;
+            give -= amt;
+            if (++i >= j)
                 i = 0;
         }
     }
@@ -453,6 +468,10 @@ int compar_board(const gameboard left,const gameboard right)
             return 1;
     return 0;
 }
+int compar_decision(const struct decision** left,const struct decision** right)
+{
+    return (*left)->worth - (*right)->worth;
+}
 
 /* top-level operations */
 struct turn_node* get_move_reaction(struct treemap* reactions,const gameboard newboard)
@@ -471,6 +490,7 @@ struct turn_node* get_move_reaction(struct treemap* reactions,const gameboard ne
 
 static char self_play_recursive(gameboard board,struct knowledge* active,struct knowledge* inactive,char turn)
 {
+    static char c;
     struct turn_node* node;
     static enum board_state state;
     static struct decision* decision;
@@ -482,19 +502,22 @@ static char self_play_recursive(gameboard board,struct knowledge* active,struct 
 
     /* base case: the game is over (won or drawn) */
     state = gameboard_get_state(board,turn);
-    if (state==board_won || state==board_complete) {
+    if (state == board_won) {
         turn_node_mark_good(node);
         return turn;
+    }
+    if (state == board_complete) {
+        turn_node_mark_good(node);
+        return EMPTY;
     }
 
     /* recursive case: the inactive player gets to go */
     inactive->node = get_move_reaction(inactive->reactions,board);
-    if (self_play_recursive(board,inactive,active,turn==X?O:X) == turn) {
+    if ((c = self_play_recursive(board,inactive,active,turn==X?O:X)) == turn)
         turn_node_mark_good(node);
-        return turn;
-    }
-    turn_node_mark_bad(node);
-    return turn == O ? X : O;
+    else if (c != EMPTY)
+        turn_node_mark_bad(node);
+    return c;
 }
 
 struct knowledge* aquire_knowledge()
