@@ -107,6 +107,8 @@ int main(int argc,const char* argv[])
             while (scanf("%d %d",&x,&y) != 2) {
                 char c;
                 do {
+                    if ( feof(stdin) )
+                        goto done;
                     c = fgetc(stdin);
                 } while (c != '\n');
                 fputs("bad input, try again: ",stdout);
@@ -163,6 +165,8 @@ int main(int argc,const char* argv[])
         fputs("play again (y/n)? ",stdout);
         while (true) {
             char c;
+            if ( feof(stdin) )
+                goto done;
             c = fgetc(stdin);
             if ( isspace(c) )
                 continue;
